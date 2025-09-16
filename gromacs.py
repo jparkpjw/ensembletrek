@@ -746,7 +746,7 @@ def mdrun(
         cmd += ' -nt 1 -ntmpi 1 -ntomp 1 -pin off -nb gpu -pme gpu -bonded gpu -update gpu'
 
     try:
-        with open("mdrun.txt", "w") as f:
+        with open("mdrun.txt", "a") as f:
             subprocess.run(cmd, shell=True, executable="/bin/bash", stdout=f, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         os.chdir(orig_dir)
@@ -896,7 +896,7 @@ def trjconv(
         echo_process = subprocess.Popen(['echo', '0'], stdout=subprocess.PIPE)
 
     try:
-        with open("trjconv.txt", "w") as f:
+        with open("trjconv.txt", "a") as f:
             #subprocess.run(cmd, stdin=echo_process.stdout, check=True, text=True, stdout=f, stderr=subprocess.STDOUT)
             subprocess.run(cmd, shell=True, executable="/bin/bash", stdin=echo_process.stdout, stdout=f, stderr=subprocess.STDOUT)
         echo_process.wait()

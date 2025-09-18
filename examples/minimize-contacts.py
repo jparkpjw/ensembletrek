@@ -43,11 +43,12 @@ def run(head_dir='./'):
     # gromacs settings
     hmr = True
     nsteps = 12500000
-    maxwarn = 2
+    maxwarn = 1
     n_cpus_gromacs = 6
     n_gpus_gromacs = 1
-    gpu_type = 'a5a'
-    gpu_only = False
+    gmx_year = 2025
+    gpu_type='a5a,a5000'
+    gpu_only=False
     
     xtc_grps = 'system' # so can restart from any frame with resolvating
     solute_grps = 'Protein' # what to store in unsolvated structures/traj
@@ -74,7 +75,7 @@ def run(head_dir='./'):
     sel1 = struct.top.select(f'(resi {pep_start} to {pep_end}) and mass > 3')
     sel2 = struct.top.select(f'(resi 0 to 175) and mass > 3')
 
-    analyze = partial(dissociate_from_native, ref=struct, sel1=sel1, sel2=sel2)
+    analyze = partial(calc_frac_native_contacts, ref=struct, sel1=sel1, sel2=sel2)
     maximize = False #maximize analysis metric or minimize? True = maximize.
 
     # how much to pad numbers in file names
@@ -97,19 +98,17 @@ def run(head_dir='./'):
     os.makedirs(analy_dir, exist_ok=True)
 
     # tools for running simulations
-    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, solute_grps=solute_grps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only, 
-        add_cmd=f"module load gromacs/gcc/11.2.1/gromacs_2025_{gpu_type}")
+    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, solute_grps=solute_grps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only)
 
     sim_executor = submitit.AutoExecutor(folder=os.path.join(sim_dir, "logs"))
     sim_executor.update_parameters(timeout_min=max_sim_time, tasks_per_node=n_sims_per_node, cpus_per_task=n_cpus_gromacs, 
                                     gpus_per_node=n_gpus_gromacs*n_sims_per_node, slurm_partition=gpu_type,
                                     slurm_job_name="sim")
-    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_2025_{gpu_type}"])
+    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_$SLURM_JOB_PARTITION"], slurm_job_name='md')
     # tools for clustering simulations
     cluster_executor = submitit.AutoExecutor(folder=os.path.join(msm_dir, "logs"))
     cluster_executor.update_parameters(timeout_min=max_cluster_time, cpus_per_task=n_cpus_cluster, 
         slurm_partition="amdcpu", slurm_mem=f'{mem_cluster}G',slurm_job_name="cluster")
-    cluster_setup_cmd = "module load gromacs/gcc/11.2.1/gromacs_2025_amdcpu"
 
     # all sims in first gen will start from given initial structure
     start_structures = solv_struct.slice(range(solv_struct.n_frames), copy=True)
@@ -135,17 +134,13 @@ def run(head_dir='./'):
         last_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(n_treks-1).zfill(padding)))
         if not os.path.exists(last_fn):
             print("Moving simulations for gen", gen, flush=True)
-            for w in range(n_treks):
-                orig_fn = os.path.join(base_treks_dir + str(w), "simulation-nojump.xtc")
-                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
+            for t in range(n_treks):
+                orig_fn = os.path.join(base_treks_dir + str(t), "simulation-nojump.xtc")
+                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
                 shutil.move(orig_fn, solv_traj_fn)
-                # traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
-                #Silent error here!
-                # gro.trjconv(solv_traj_fn, traj_fn, ref_fn=solv_struct_fn, xtc_grps=solute_grps)
-                orig_fn = os.path.join(base_treks_dir + str(w), "simulation-nojump-solute.xtc")
-                traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
+                orig_fn = os.path.join(base_treks_dir + str(t), "simulation-nojump-solute.xtc")
+                traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
                 shutil.move(orig_fn, traj_fn)
-
 
         else:
             print("Already moved simulations for gen", gen)
@@ -159,7 +154,7 @@ def run(head_dir='./'):
         if not os.path.exists(curr_msm_dir):
             print("Clustering gen", gen, flush=True)
             os.makedirs(curr_msm_dir)
-            job = cluster_executor.submit(cluster, fns_to_cluster, n_cpus_cluster, struct_fn, atm_inds_cluster, cluster_radius, curr_msm_dir, centers_fn, cluster_setup_cmd)
+            job = cluster_executor.submit(cluster, fns_to_cluster, n_cpus_cluster, struct_fn, atm_inds_cluster, cluster_radius, curr_msm_dir, centers_fn)
             job.result()
         else:
             print("Already clustered gen", gen, flush=True)
@@ -251,7 +246,7 @@ def cluster(fns_to_cluster, n_cpus_cluster, struct_fn, atm_inds_cluster, cluster
     centers.superpose(struct)
     centers.save_xtc(centers_fn)
 
-def dissociate_from_native(traj, ref, sel1, sel2, contact_cutoff=0.5):
+def calc_frac_native_contacts(traj, ref, sel1, sel2, contact_cutoff=0.5):
     '''
     Computes what fraction of contacts from a native state exist, per frame.
     traj:              mdtraj trajectory

@@ -628,6 +628,7 @@ def mdrun(
     gpu_only: bool = False,
     validate: bool = True,
     add_cmd: str = None,
+    solute_grps: str = None,
     **kwargs,
 ) -> md.Trajectory:
     """Run a simulation from a given starting structure.
@@ -707,6 +708,7 @@ def mdrun(
     
     xtc_file = 'simulation.xtc'
     xtc_nojump_file = 'simulation-nojump.xtc'
+    xtc_nojump_file_solute = 'simulation-nojump-solute.xtc'
     xtc_gro_file = 'xtc-grps-nojump.gro'
     output_gro_file = 'output-system.gro'
     output_nojump_gro_file = 'output-system-nojump.gro'
@@ -754,10 +756,13 @@ def mdrun(
     print_warnings_and_notes("mdrun.txt")
 
     # Remove pbc jumps
-    trjconv(output_gro_file, output_nojump_gro_file, ref_fn=input_gro_file, pbc='nojump')
+    trjconv(output_gro_file, output_nojump_gro_file, ref_fn=input_gro_file, pbc='nojump', add_cmd=add_cmd)
     if os.path.exists(xtc_file):
         trjconv(output_nojump_gro_file, xtc_gro_file, xtc_grps=xtc_grps, add_cmd=add_cmd)
         trjconv(xtc_file, xtc_nojump_file, ref_fn=xtc_gro_file, pbc='nojump', add_cmd=add_cmd)
+        if solute_grps is not None:
+            trjconv(xtc_nojump_file, xtc_nojump_file_solute, 
+                ref_fn=xtc_gro_file, xtc_grps= solute_grps, add_cmd=add_cmd)
 
     # Convert to pdb so can preserve atom naming since mdtraj messes up gro files
     trjconv(output_nojump_gro_file, output_nojump_pdb_file, add_cmd=add_cmd)
@@ -841,6 +846,7 @@ def npt_run(
     maxwarn: int = 0,
     nsteps: int = None,
     xtc_grps: str = 'Prot-Masses',
+    solute_grps: str = None,
     **kwargs,
 ) -> md.Trajectory:
     """Run an NPT simulatoin from a structure.
@@ -860,8 +866,10 @@ def npt_run(
         MDTraj trajectory object containing minimized structure
     """
     print("-" * 40)
+    print(kwargs)
     print("Performing NPT simulation and printing warnings/notes...")
-    return mdrun(structure, output_dir, top, itps, mdp, maxwarn=maxwarn, nsteps=nsteps, xtc_grps=xtc_grps, **kwargs)
+    return mdrun(structure, output_dir, top, itps, mdp, maxwarn=maxwarn, nsteps=nsteps, xtc_grps=xtc_grps, 
+        solute_grps=solute_grps, **kwargs)
 
 def trjconv(
     input_fn: str,

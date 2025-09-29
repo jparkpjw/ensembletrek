@@ -707,7 +707,8 @@ def mdrun(
     print_warnings_and_notes("grompp.txt")
     
     xtc_file = 'simulation.xtc'
-    xtc_nojump_file = 'simulation-nojump.xtc'
+    xtc_intermediate_file = 'simulation-nojump.xtc'
+    xtc_nojump_file = 'simulation-nojump-mol.xtc'
     xtc_nojump_file_solute = 'simulation-nojump-solute.xtc'
     xtc_gro_file = 'xtc-grps-nojump.gro'
     output_gro_file = 'output-system.gro'
@@ -756,18 +757,22 @@ def mdrun(
     print_warnings_and_notes("mdrun.txt")
 
     # Remove pbc jumps
-    trjconv(output_gro_file, output_nojump_gro_file, ref_fn=input_gro_file, pbc='nojump', add_cmd=add_cmd)
+    trjconv(output_gro_file, output_nojump_gro_file, ref_fn='simulation.tpr', pbc='mol', add_cmd=add_cmd)
     if os.path.exists(xtc_file):
         trjconv(output_nojump_gro_file, xtc_gro_file, xtc_grps=xtc_grps, add_cmd=add_cmd)
-        trjconv(xtc_file, xtc_nojump_file, ref_fn=xtc_gro_file, pbc='nojump', add_cmd=add_cmd)
+
+        trjconv(xtc_file, xtc_intermediate_file, ref_fn='simulation.tpr', pbc='nojump', add_cmd=add_cmd)
+        trjconv(xtc_intermediate_file, xtc_nojump_file, ref_fn='simulation.tpr', pbc='mol', add_cmd=add_cmd, ur='compact', center='')
         if solute_grps is not None:
             trjconv(xtc_nojump_file, xtc_nojump_file_solute, 
                 ref_fn=xtc_gro_file, xtc_grps= solute_grps, add_cmd=add_cmd)
 
     # Convert to pdb so can preserve atom naming since mdtraj messes up gro files
     trjconv(output_nojump_gro_file, output_nojump_pdb_file, add_cmd=add_cmd)
-    final_struct = md.load(output_nojump_pdb_file, standard_names=False)
-
+    try:
+        final_struct = md.load(output_nojump_pdb_file, standard_names=False)
+    except:
+        print(f'Could not load {output_nojump_pdb_file}.')
     os.chdir(orig_dir)
 
     return final_struct
@@ -878,6 +883,7 @@ def trjconv(
     ref_fn: Optional[str] = None,
     xtc_grps: Optional[str] = None,
     add_cmd: str = None,
+    **kwargs,
 ) -> None:
     """Convert a file from one format to another.
     
@@ -888,6 +894,7 @@ def trjconv(
         ref_fn: reference structure file for pbc removal
         xtc_grps: Groups for compressed trajectory output (xtc file)
         add_cmd: Additional command to run before executing mdrun (e.g. module load module_name)
+        **kwargs: Additional commands to pass to Gromacs (e.g. -ur compact)
     """
     if ref_fn is None:
         ref_fn = input_fn
@@ -897,11 +904,19 @@ def trjconv(
         cmd += f' -pbc {pbc}'
     if add_cmd:
         cmd = f'{add_cmd} && ' + cmd
+    if kwargs:
+        cmd += ' ' + ' '.join(f"-{key} {value}" for key, value in kwargs.items())
 
     if xtc_grps is not None:
-        echo_process = subprocess.Popen(['echo', xtc_grps], stdout=subprocess.PIPE)
+        if 'center' in kwargs:
+            echo_process = subprocess.Popen(['echo', 'protein', xtc_grps], stdout=subprocess.PIPE)
+        else:  
+            echo_process = subprocess.Popen(['echo', xtc_grps], stdout=subprocess.PIPE)
     else:
-        echo_process = subprocess.Popen(['echo', '0'], stdout=subprocess.PIPE)
+        if 'center' in kwargs:
+            echo_process = subprocess.Popen(['echo', 'protein', '0'], stdout=subprocess.PIPE)
+        else:
+            echo_process = subprocess.Popen(['echo', '0'], stdout=subprocess.PIPE)
 
     try:
         with open("trjconv.txt", "a") as f:

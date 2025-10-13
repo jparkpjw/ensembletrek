@@ -19,7 +19,7 @@ outdir = './'
 
 def run(head_dir='./'):
     # num sims and where to put them
-    n_gens = 10
+    n_gens = 20
     n_treks = 10
     fast_dir = os.path.join(head_dir, "min-contacts")
     os.makedirs(fast_dir, exist_ok=True)
@@ -43,16 +43,16 @@ def run(head_dir='./'):
     # gromacs settings
     hmr = True
     nsteps = 12500000
-    maxwarn = 1
+    maxwarn = 2
     n_cpus_gromacs = 6
     n_gpus_gromacs = 1
-    gmx_year = 2025
-    gpu_type='a5a,a5000'
-    gpu_only=False
-    
+    gpu_type = 'a5a'
+    gmx_year=2025
+
+    gpu_only = False
     xtc_grps = 'system' # so can restart from any frame with resolvating
     solute_grps = 'Protein' # what to store in unsolvated structures/traj
-    max_sim_time = 60
+    max_sim_time = 60*60 #min
     n_sims_per_node = 1
     mdp = gro.MDP.npt(hmr=hmr, gpu_only=gpu_only, xtc_grps=xtc_grps)
 
@@ -62,20 +62,22 @@ def run(head_dir='./'):
     #Maybe pass a memory argument here?
     mem_cluster=128 #Gb
 
-    cluster_radius = 0.12 # in nm
+    cluster_radius = 0.14 # in nm
     max_cluster_time = 6000
     lag_time = 1
     atm_inds_cluster = struct.topology.select('name CA')
     width = 1.0
 
     # analysis settings
+    #Enter two groups (prot_indcs and peptide_indcs) to drive apart.
     pep_start = struct.top.residue(366).index
     pep_end = struct.top.atom(solv_struct.top.select('protein')[-1]).residue.index
-    #below are the two important ones, select indicies you want to drive apart
-    sel1 = struct.top.select(f'(resi {pep_start} to {pep_end}) and mass > 3')
-    sel2 = struct.top.select(f'(resi 0 to 175) and mass > 3')
+    peptide_indcs = struct.top.select(f'(resi {pep_start} to {pep_end}) and mass > 3')
+    prot_indcs = struct.top.select(f'(resi 0 to 175) and mass > 3')
 
-    analyze = partial(calc_frac_native_contacts, ref=struct, sel1=sel1, sel2=sel2)
+    # analyze = partial(dissociate_from_native, ref=struct, sel1=peptide_indcs, sel2=prot_indcs)
+    analyze = partial(dissociate, sel1=peptide_indcs, sel2=prot_indcs)
+
     maximize = False #maximize analysis metric or minimize? True = maximize.
 
     # how much to pad numbers in file names
@@ -98,17 +100,17 @@ def run(head_dir='./'):
     os.makedirs(analy_dir, exist_ok=True)
 
     # tools for running simulations
-    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, solute_grps=solute_grps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only)
+    env_cmd = f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_{gpu_type}"
+    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, solute_grps=solute_grps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only, add_cmd = env_cmd)
 
     sim_executor = submitit.AutoExecutor(folder=os.path.join(sim_dir, "logs"))
     sim_executor.update_parameters(timeout_min=max_sim_time, tasks_per_node=n_sims_per_node, cpus_per_task=n_cpus_gromacs, 
-                                    gpus_per_node=n_gpus_gromacs*n_sims_per_node, slurm_partition=gpu_type,
-                                    slurm_job_name="sim")
-    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_$SLURM_JOB_PARTITION"], slurm_job_name='md')
+                                    gpus_per_node=n_gpus_gromacs*n_sims_per_node, slurm_partition=gpu_type)    
+    sim_executor.update_parameters(slurm_job_name='md')
     # tools for clustering simulations
     cluster_executor = submitit.AutoExecutor(folder=os.path.join(msm_dir, "logs"))
-    cluster_executor.update_parameters(timeout_min=max_cluster_time, cpus_per_task=n_cpus_cluster, 
-        slurm_partition="amdcpu", slurm_mem=f'{mem_cluster}G',slurm_job_name="cluster")
+    cluster_executor.update_parameters(timeout_min=max_cluster_time, cpus_per_task=n_cpus_cluster, slurm_partition="amdcpu", 
+                                        slurm_mem=f'{mem_cluster}G', slurm_job_name='cluster')
 
     # all sims in first gen will start from given initial structure
     start_structures = solv_struct.slice(range(solv_struct.n_frames), copy=True)
@@ -116,8 +118,9 @@ def run(head_dir='./'):
         start_structures = start_structures + solv_struct
 
     gen = 0
+    n_min_contacts = 9999
 
-    while gen < n_gens:
+    while gen < n_gens and n_min_contacts!=0:
         gen_dir = os.path.join(sim_dir, "gen" + str(gen))
         base_treks_dir = os.path.join(gen_dir, "trek")
         if not os.path.exists(gen_dir):
@@ -134,13 +137,14 @@ def run(head_dir='./'):
         last_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(n_treks-1).zfill(padding)))
         if not os.path.exists(last_fn):
             print("Moving simulations for gen", gen, flush=True)
-            for t in range(n_treks):
-                orig_fn = os.path.join(base_treks_dir + str(t), "simulation-nojump.xtc")
-                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
+            for w in range(n_treks):
+                orig_fn = os.path.join(base_treks_dir + str(w), "simulation-nojump.xtc")
+                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
                 shutil.move(orig_fn, solv_traj_fn)
-                orig_fn = os.path.join(base_treks_dir + str(t), "simulation-nojump-solute.xtc")
-                traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
+                orig_fn = os.path.join(base_treks_dir + str(w), "simulation-nojump-solute.xtc")
+                traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
                 shutil.move(orig_fn, traj_fn)
+
 
         else:
             print("Already moved simulations for gen", gen)
@@ -170,11 +174,14 @@ def run(head_dir='./'):
             print("Analyzing gen", gen, flush=True)
             geometric_feature = analyze(centers)
             np.savetxt(analy_fn, geometric_feature)
+            print(f'Min contacts observed: {np.amin(geometric_feature)}.')
         else:
             print("Already analyzed gen", gen, flush=True)
             geometric_feature = np.loadtxt(analy_fn)
 
-        # get counds per state
+        n_min_contacts = np.amin(geometric_feature)
+
+        # get counts per state
         assign_fn = os.path.join(curr_msm_dir, "assignments.h5")
         assigns = ra.load(assign_fn)
         c_per_state = np.bincount(assigns.ravel())
@@ -214,6 +221,11 @@ def run(head_dir='./'):
 
         gen += 1
 
+    if n_min_contacts == 0:
+        print('Finishing FAST, fully dissociated.')
+    elif gen == n_gens:
+        print(f'Finished gen {gen}, stopping.')
+
 def cluster(fns_to_cluster, n_cpus_cluster, struct_fn, atm_inds_cluster, cluster_radius, msm_dir, centers_fn, cluster_setup_cmd=None):
 
     if cluster_setup_cmd is not None:
@@ -246,11 +258,10 @@ def cluster(fns_to_cluster, n_cpus_cluster, struct_fn, atm_inds_cluster, cluster
     centers.superpose(struct)
     centers.save_xtc(centers_fn)
 
-def calc_frac_native_contacts(traj, ref, sel1, sel2, contact_cutoff=0.5):
+def dissociate(traj, sel1, sel2, contact_cutoff=0.5):
     '''
-    Computes what fraction of contacts from a native state exist, per frame.
+    Computes how many contacts exist between two atom selections (per frame).
     traj:              mdtraj trajectory
-    ref:               mdtraj.trajectory of reference state
     sel1/2:            atom indicies defining the two objects to calculate contacts between
     contact_cutoff:    distance at which two heavy atoms are not "in contact" (nm).
 
@@ -258,18 +269,10 @@ def calc_frac_native_contacts(traj, ref, sel1, sel2, contact_cutoff=0.5):
     '''
 
     atom_pairs = np.array([[i, j] for i in sel1 for j in sel2])
+    traj_distances = md.compute_distances(traj, atom_pairs)
 
-    ref_distances = md.compute_distances(ref, atom_pairs)[0]
-    native_mask = ref_distances < contact_cutoff
-    native_pairs = atom_pairs[native_mask]
-
-    traj_distances = md.compute_distances(traj, native_pairs)
-
-    native_contacts_present = traj_distances < contact_cutoff
-    fraction_native_contacts = np.sum(native_contacts_present, axis=1) / len(native_pairs)
-    print('Minimum fraction of contacts observed: ', np.amin(fraction_native_contacts), flush=True)
-    return(fraction_native_contacts)
-
+    n_contacts = np.sum(traj_distances < contact_cutoff, axis=1)
+    return(n_contacts)
 
 if __name__ == '__main__':
 

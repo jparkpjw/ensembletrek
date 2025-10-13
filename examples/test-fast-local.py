@@ -111,14 +111,14 @@ def run():
             print("Already ran simulations for gen", gen)
 
         # move trajectories
-        last_fn = os.path.join(traj_dir, "g%s-w%s.xtc" % (str(gen).zfill(padding), str(n_treks-1).zfill(padding)))
+        last_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(n_treks-1).zfill(padding)))
         if not os.path.exists(last_fn):
             print("Moving simulations for gen", gen)
-            for w in range(n_treks):
-                orig_fn = os.path.join(base_treks_dir + str(w), "simulation-nojump.xtc")
-                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-w%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
+            for t in range(n_treks):
+                orig_fn = os.path.join(base_treks_dir + str(t), "simulation-nojump.xtc")
+                solv_traj_fn = os.path.join(solv_traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
                 shutil.move(orig_fn, solv_traj_fn)
-                traj_fn = os.path.join(traj_dir, "g%s-w%s.xtc" % (str(gen).zfill(padding), str(w).zfill(padding)))
+                traj_fn = os.path.join(traj_dir, "g%s-t%s.xtc" % (str(gen).zfill(padding), str(t).zfill(padding)))
                 gro.trjconv(solv_traj_fn, traj_fn, ref_fn=solv_struct_fn, xtc_grps=solute_grps)
         else:
             print("Already moved simulations for gen", gen)

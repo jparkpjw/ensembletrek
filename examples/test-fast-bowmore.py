@@ -42,7 +42,7 @@ def run():
     n_cpus_gromacs = 6
     n_gpus_gromacs = 1
     gmx_year = 2025
-    gpu_type='a5a,a5000'
+    gpu_type='a5a'
     gpu_only=False
 
     if n_gpus_gromacs > 1 and gpu_only:
@@ -92,7 +92,7 @@ def run():
     sim_executor = submitit.AutoExecutor(folder=os.path.join(sim_dir, "logs"))
     sim_executor.update_parameters(timeout_min=max_sim_time, tasks_per_node=n_sims_per_node, cpus_per_task=n_cpus_gromacs, 
                                     gpus_per_node=n_gpus_gromacs*n_sims_per_node, slurm_partition=gpu_type)
-    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_$SLURM_JOB_PARTITION"], slurm_job_name='md')
+    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_{gpu_type}"], slurm_job_name='md')
 
 
     # tools for clustering simulations

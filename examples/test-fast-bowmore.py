@@ -87,13 +87,12 @@ def run():
     os.makedirs(analy_dir, exist_ok=True)
 
     # tools for running simulations
-    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only, solute_grps=solute_grps)
+    env_cmd = f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_{gpu_type}"
+    mdrun = partial(gro.npt_run, top=top, itps=itps, nsteps=nsteps, maxwarn=maxwarn, mdp=mdp, xtc_grps=xtc_grps, gpu_only=gpu_only, solute_grps=solute_grps, add_cmd=env_cmd)
 
     sim_executor = submitit.AutoExecutor(folder=os.path.join(sim_dir, "logs"))
     sim_executor.update_parameters(timeout_min=max_sim_time, tasks_per_node=n_sims_per_node, cpus_per_task=n_cpus_gromacs, 
                                     gpus_per_node=n_gpus_gromacs*n_sims_per_node, slurm_partition=gpu_type)
-    sim_executor.update_parameters(local_setup = [f"module load gromacs/gcc/11.2.1/gromacs_{gmx_year}_{gpu_type}"], slurm_job_name='md')
-
 
     # tools for clustering simulations
     cluster_executor = submitit.AutoExecutor(folder=os.path.join(msm_dir, "logs"))

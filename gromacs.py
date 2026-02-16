@@ -456,6 +456,7 @@ def create_system(
     add_ions: bool = True,
     neutralize: bool = True,
     ion_concentration: float = 0.1,
+    cs_file: str = 'spc216.gro'
 ) -> Tuple[md.Trajectory, str, List[Tuple[str, str]]]:
     """Create a system for a GROMACS simulation from an MDTraj trajectory.
     
@@ -526,7 +527,7 @@ def create_system(
     
     # Add water
     solv_file = 'solv.gro'
-    cmd = ['gmx', 'solvate', '-cp', box_file, '-cs',
+    cmd = ['gmx', 'solvate', '-cp', box_file, '-cs', cs_file,
             '-o', solv_file, '-p', top_file]
     
     try:
